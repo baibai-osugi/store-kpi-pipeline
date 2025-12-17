@@ -1,4 +1,6 @@
 import { BigQuery } from "@google-cloud/bigquery";
+import fs from "node:fs";
+import path from "node:path";
 
 const projectId = process.env.BQ_PROJECT;
 const dataset = process.env.BQ_DATASET;
@@ -21,18 +23,13 @@ function randDownloads() {
 }
 
 async function main() {
-  const apps = [
-    {
-      app_name: "ふつうの神経衰弱",
-      ios_app_id: "849663603",
-      android_app_id: "jp.baibai.fshinkei",
-    },
-    {
-      app_name: "ふつうのビンゴ",
-      ios_app_id: "1082797006",
-      android_app_id: "jp.baibai.fbingo",
-    }
-  ];
+  let apps;
+  try {
+    const appsPath = path.resolve("config/apps.json");
+    apps = JSON.parse(fs.readFileSync(appsPath, "utf-8"));
+  } catch (e) {
+    throw new Error(`Failed to load config/apps.json: ${e.message}`);
+  }
 
   const date = todayJstYYYYMMDD();
   const source = "dummy";
