@@ -1,0 +1,11 @@
+{
+  "name": "store-kpi-pipeline",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run:daily:dummy": "node scripts/daily_dummy.js"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^8.0.0"
+  }
+}
