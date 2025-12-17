@@ -16,40 +16,83 @@ function todayJstYYYYMMDD() {
   return jst.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-async function main() {
-  const date = todayJstYYYYMMDD();
+function randDownloads() {
+  return Math.floor(Math.random() * 50) + 1;
+}
 
-  const iosAppId = "849663603";
-  const androidAppId = "jp.baibai.fshinkei";
-  const appName = "ふつうの神経衰弱";
+async function main() {
+  const apps = [
+    {
+      app_name: "ふつうの神経衰弱",
+      ios_app_id: "849663603",
+      android_app_id: "jp.baibai.fshinkei",
+    },
+    {
+      app_name: "ふつうのビンゴ",
+      ios_app_id: "1082797006",
+      android_app_id: "jp.baibai.fbingo",
+    }
+  ];
+
+  const date = todayJstYYYYMMDD();
   const source = "dummy";
 
-  const dlIosJp = Math.floor(Math.random() * 50) + 1;
-  const dlIosOverseas = 0;
-  const dlAndroidJp = Math.floor(Math.random() * 50) + 1;
-  const dlAndroidOverseas = 0;
+  // apps を展開して「書き込み行」を作る（ios/android × JP/OVERSEAS）
+  const rows = [];
+  for (const app of apps) {
+    if (app.ios_app_id) {
+      rows.push(
+        {
+          store: "ios",
+          app_id: app.ios_app_id,
+          app_name: app.app_name,
+          country_group: "JP",
+          downloads: randDownloads(),
+        },
+        {
+          store: "ios",
+          app_id: app.ios_app_id,
+          app_name: app.app_name,
+          country_group: "OVERSEAS",
+          downloads: 0,
+        }
+      );
+    }
+    if (app.android_app_id) {
+      rows.push(
+        {
+          store: "android",
+          app_id: app.android_app_id,
+          app_name: app.app_name,
+          country_group: "JP",
+          downloads: randDownloads(),
+        },
+        {
+          store: "android",
+          app_id: app.android_app_id,
+          app_name: app.app_name,
+          country_group: "OVERSEAS",
+          downloads: 0,
+        }
+      );
+    }
+  }
 
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
 
-  // ★MERGE：date+store+app_id+country_group をキーに上書き
   const query = `
     MERGE ${tableFqdn} T
     USING (
       SELECT
         DATE(@date) AS date,
-        store,
-        app_id,
-        @app_name AS app_name,
-        country_group,
-        downloads,
+        r.store,
+        r.app_id,
+        r.app_name,
+        r.country_group,
+        r.downloads,
         @source AS source,
         CURRENT_TIMESTAMP() AS ingested_at
-      FROM UNNEST([
-        STRUCT("ios" AS store, @ios_app_id AS app_id, "JP" AS country_group, @dl_ios_jp AS downloads),
-        STRUCT("ios" AS store, @ios_app_id AS app_id, "OVERSEAS" AS country_group, @dl_ios_overseas AS downloads),
-        STRUCT("android" AS store, @android_app_id AS app_id, "JP" AS country_group, @dl_android_jp AS downloads),
-        STRUCT("android" AS store, @android_app_id AS app_id, "OVERSEAS" AS country_group, @dl_android_overseas AS downloads)
-      ])
+      FROM UNNEST(@rows) AS r
     ) S
     ON
       T.date = S.date
@@ -72,14 +115,8 @@ async function main() {
     location: "asia-northeast1",
     params: {
       date,
-      ios_app_id: iosAppId,
-      android_app_id: androidAppId,
-      app_name: appName,
       source,
-      dl_ios_jp: dlIosJp,
-      dl_ios_overseas: dlIosOverseas,
-      dl_android_jp: dlAndroidJp,
-      dl_android_overseas: dlAndroidOverseas,
+      rows,
     },
   };
 
@@ -87,7 +124,7 @@ async function main() {
   console.log(`Started job ${job.id}`);
   await job.getQueryResults();
 
-  console.log("MERGE done:", { date, dlIosJp, dlAndroidJp });
+  console.log("MERGE done:", { date, apps: apps.length, rows: rows.length });
 }
 
 main().catch((e) => {
