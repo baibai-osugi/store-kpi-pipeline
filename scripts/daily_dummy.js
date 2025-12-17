@@ -10,20 +10,46 @@ if (!projectId || !dataset || !tableDaily) {
 
 const bigquery = new BigQuery({ projectId });
 
-// JST日付を作る（毎日1行入れたい想定）
 function todayJstYYYYMMDD() {
   const now = new Date();
-  // JSTに寄せる簡易版（UTC+9）
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  return jst.toISOString().slice(0, 10); // "YYYY-MM-DD"
+  return jst.toISOString().slice(0, 10);
 }
 
-const run = async () => {
+async function main() {
   const date = todayJstYYYYMMDD();
 
-  // ダミー値（必要なら調整）
   const appName = "dummy_app";
-  const store = "iOS"; // or "Android"
+  const store = "iOS";
   const downloads = Math.floor(Math.random() * 50) + 1;
 
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
+
+  const query = `
+    INSERT INTO ${tableFqdn} (date, app_name, store, downloads)
+    VALUES (@date, @app_name, @store, @downloads)
+  `;
+
+  const options = {
+    query,
+    // dataset のロケーションが US 以外ならここを合わせてください
+    location: "US",
+    params: {
+      date,
+      app_name: appName,
+      store,
+      downloads,
+    },
+  };
+
+  const [job] = await bigquery.createQueryJob(options);
+  console.log(`Started job ${job.id}`);
+
+  await job.getQueryResults();
+  console.log("Insert done:", { date, appName, store, downloads });
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
