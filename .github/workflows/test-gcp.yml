@@ -14,21 +14,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Show GitHub OIDC claims (safe)
+        shell: bash
         run: |
-          echo "Requesting OIDC token..."
-          TOKEN_JSON=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=iam.googleapis.com")
-
-          JWT=$(echo "$TOKEN_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin)['value'])")
-
-          PAYLOAD=$(echo "$JWT" | cut -d'.' -f2 | tr '_-' '/+' | sed 's/$/==/' | base64 -d 2>/dev/null || true)
-
-          echo "$PAYLOAD" | python3 -c "
-import sys, json
-p=json.load(sys.stdin)
-keys=['repository','repository_owner','ref','workflow','job_workflow_ref','sub','aud','actor']
-print(json.dumps({k:p.get(k) for k in keys if k in p}, indent=2, ensure_ascii=False))
-"
+          set -euo pipefail
+          TOKEN_JSON=$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=iam.googleapis.com")
+          JWT=$(echo "$TOKEN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['value'])")
+          PAYLOAD=$(JWT="$JWT" python3 -c 'import os,base64; jwt=os.environ["JWT"]; seg=jwt.split(".")[1]; seg += "="*((4-len(seg)%4)%4); print(base64.urlsafe_b64decode(seg).decode("utf-8"))')
+          echo "$PAYLOAD" | jq '{repository, repository_owner, ref, workflow, job_workflow_ref, sub, aud, actor}'
 
       - name: Auth to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
@@ -42,6 +34,7 @@ print(json.dumps({k:p.get(k) for k in keys if k in p}, indent=2, ensure_ascii=Fa
           install_components: 'bq'
 
       - name: Test BigQuery access
+        shell: bash
         run: |
           gcloud config set project store-kpi
           bq ls
