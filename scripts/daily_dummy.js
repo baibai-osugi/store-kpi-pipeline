@@ -32,8 +32,7 @@ async function main() {
 
   const options = {
     query,
-    // dataset のロケーションが US 以外ならここを合わせてください
-    location: "US",
+    location: "asia-northeast1",
     params: {
       date,
       app_name: appName,
