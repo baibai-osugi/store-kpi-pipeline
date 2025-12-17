@@ -26,18 +26,21 @@ async function main() {
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
 
   const query = `
-    INSERT INTO ${tableFqdn} (date, app_name, store, downloads)
-    VALUES (@date, @app_name, @store, @downloads)
-  `;
+  INSERT INTO ${tableFqdn} (date, app_id, app_name, store, downloads)
+  VALUES
+    (@date, @app_id, @app_name, "iOS", @dl_ios),
+    (@date, @app_id, @app_name, "Android", @dl_android)
+` ;
 
   const options = {
     query,
     location: "asia-northeast1",
     params: {
       date,
+      app_id: appId,
       app_name: appName,
-      store,
-      downloads,
+      dl_ios: Math.floor(Math.random() * 50) + 1,
+      dl_android: Math.floor(Math.random() * 50) + 1,
     },
   };
 
