@@ -1,15 +1,13 @@
 name: ios-salesreports-to-bq
 
 on:
-  schedule:
-    # 毎日 JST 11:00 = UTC 02:00（必要なら後で調整）
-    - cron: '0 2 * * *'
   workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +17,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Fetch iOS sales report and load to BigQuery
+      - name: Fetch iOS sales report and MERGE to BigQuery
         env:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -28,6 +26,7 @@ jobs:
 
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           BQ_PROJECT: store-kpi
-          BQ_DATASET: app_kpi_raw
-          BQ_TABLE: app_store_installs_daily
-        run: node scripts/fetch_ios_sales_and_load_bq.js
+          BQ_DATASET: app_kpi
+          BQ_TABLE_DAILY: downloads_daily
+          BQ_LOCATION: US
+        run: node scripts/fetch_ios_sales_and_load_bq.js --mode latest
