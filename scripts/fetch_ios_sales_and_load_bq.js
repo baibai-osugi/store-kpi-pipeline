@@ -69,14 +69,21 @@ function loadApps() {
   const apps = JSON.parse(fs.readFileSync(appsPath, "utf-8"));
   if (!Array.isArray(apps)) throw new Error("apps.json must be an array");
 
-  // iOSは bundleId で絞りたい（apps.json のどれかに入っている前提）
-  // 例: { app_name, ios_bundle_id } の形を想定
-  const bundleToName = new Map();
+  const bundleToName = new Map(); // bundleId -> appName
+  const skuToBundle = new Map();  // sku -> bundleId
+
   for (const a of apps) {
     if (!a.app_name) throw new Error(`Invalid app entry (missing app_name): ${JSON.stringify(a)}`);
+
     if (a.ios_bundle_id) bundleToName.set(a.ios_bundle_id, a.app_name);
+
+    // ★ここが肝：SKUでbundleIdへ
+    if (a.ios_sku && a.ios_bundle_id) {
+      skuToBundle.set(String(a.ios_sku).trim(), String(a.ios_bundle_id).trim());
+    }
   }
-  return bundleToName; // bundleId -> appName
+
+  return { bundleToName, skuToBundle };
 }
 
 function parseTsv(buf) {
@@ -106,25 +113,6 @@ function toInt(x) {
   const s = String(x ?? "0").replace(/,/g, "").trim();
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
-}
-
-async function fetchAppsSkuToBundleId(token) {
-  // /v1/apps から sku -> bundleId を取る（ページング対応）
-  const map = new Map();
-  let url = "https://api.appstoreconnect.apple.com/v1/apps?limit=200";
-  while (url) {
-    const { status, body } = await httpGet(url, { Authorization: `Bearer ${token}` });
-    if (status !== 200) throw new Error(`List apps failed: ${status} ${body.toString("utf8")}`);
-    const json = JSON.parse(body.toString("utf8"));
-
-    for (const app of json.data ?? []) {
-      const sku = (app.attributes?.sku ?? "").trim();
-      const bundleId = (app.attributes?.bundleId ?? "").trim();
-      if (sku && bundleId) map.set(sku, bundleId);
-    }
-    url = json.links?.next ?? null;
-  }
-  return map;
 }
 
 async function fetchSalesReportTsv(token, reportDate) {
@@ -195,32 +183,28 @@ async function mergeToBigQuery(bigquery, tableFqdn, date, rows, source) {
 }
 
 async function main() {
-  // --mode latest|backfill  --days 7 みたいに使える
   const mode = getArg("mode", "latest"); // latest | backfill
-  const days = Number(getArg("days", "1")); // backfillの時だけ使う想定
-  const explicitDate = getArg("date", null); // YYYY-MM-DD を指定したい時
+  const days = Number(getArg("days", "1"));
+  const explicitDate = getArg("date", null);
 
-  const bundleToName = loadApps();
-
+  const { bundleToName, skuToBundle } = loadApps();
   const token = makeJwt();
-  const skuToBundle = await fetchAppsSkuToBundleId(token);
 
-  const credentials = process.env.GCP_SA_KEY ? JSON.parse(process.env.GCP_SA_KEY) : undefined;
+  let credentials;
+  try {
+    credentials = process.env.GCP_SA_KEY ? JSON.parse(process.env.GCP_SA_KEY) : undefined;
+  } catch {
+    throw new Error("GCP_SA_KEY is not valid JSON (GitHub Secretsの貼り付け内容を確認してください)");
+  }
   const bigquery = new BigQuery({ projectId, credentials });
 
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
 
   const targets = [];
+  if (explicitDate) targets.push(explicitDate);
+  else if (mode === "backfill") for (let i = 1; i <= Math.max(1, days); i++) targets.push(ymdInLosAngeles(i));
+  else targets.push(ymdInLosAngeles(1));
 
-  if (explicitDate) {
-    targets.push(explicitDate);
-  } else if (mode === "backfill") {
-    for (let i = 1; i <= Math.max(1, days); i++) targets.push(ymdInLosAngeles(i));
-  } else {
-    targets.push(ymdInLosAngeles(1));
-  }
-
-  // 古い順に実行したい
   targets.sort();
 
   let processed = 0;
@@ -231,10 +215,8 @@ async function main() {
     const tsvBuf = await fetchSalesReportTsv(token, reportDate);
     const rows = parseTsv(tsvBuf);
 
-    // 集計：bundleId -> {JP, OVERSEAS}
     const agg = new Map();
 
-    // Sales SUMMARY TSVの列名は環境で多少違うことがあるので、候補を複数持つ
     for (const r of rows) {
       const sku = String(pickFirst(r, ["SKU"])).trim();
       const country = String(pickFirst(r, ["Country Code", "Country", "国家コード"])).trim().toUpperCase();
@@ -243,13 +225,11 @@ async function main() {
       if (!sku) continue;
 
       const bundleId = skuToBundle.get(sku);
-      if (!bundleId) continue; // bundleId不明は捨てる（必要なら後でログ出し）
+      if (!bundleId) continue;
 
-      // apps.json に無いアプリは無視（対象アプリ以外が混ざるのを防ぐ）
       if (!bundleToName.has(bundleId)) continue;
 
       if (!agg.has(bundleId)) agg.set(bundleId, { JP: 0, OVERSEAS: 0 });
-
       if (country === "JP") agg.get(bundleId).JP += units;
       else agg.get(bundleId).OVERSEAS += units;
     }
@@ -257,7 +237,6 @@ async function main() {
     const outRows = [];
     for (const [bundleId, v] of agg.entries()) {
       const appName = bundleToName.get(bundleId);
-
       outRows.push(
         { store: "ios", app_id: bundleId, app_name: appName, country_group: "JP", downloads: v.JP },
         { store: "ios", app_id: bundleId, app_name: appName, country_group: "OVERSEAS", downloads: v.OVERSEAS }
@@ -265,7 +244,7 @@ async function main() {
     }
 
     if (outRows.length === 0) {
-      console.log("No matching iOS rows (maybe report not ready yet or apps.json missing ios_bundle_id). Skipped:", reportDate);
+      console.log("No matching iOS rows. Skipped:", reportDate);
       continue;
     }
 
