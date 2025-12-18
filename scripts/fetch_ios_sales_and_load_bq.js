@@ -205,7 +205,9 @@ async function main() {
   const token = makeJwt();
   const skuToBundle = await fetchAppsSkuToBundleId(token);
 
-  const bigquery = new BigQuery({ projectId });
+  const credentials = process.env.GCP_SA_KEY ? JSON.parse(process.env.GCP_SA_KEY) : undefined;
+  const bigquery = new BigQuery({ projectId, credentials });
+
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
 
   const targets = [];
