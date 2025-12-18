@@ -2,11 +2,13 @@
   {
     "app_name": "ふつうの神経衰弱",
     "android_app_id": "jp.baibai.fshinkei",
-    "ios_bundle_id": "jp.baibai.fshinkei"
+    "ios_bundle_id": "jp.baibai.fshinkei",
+    "ios_sku": "FSHINKEI"
   },
   {
     "app_name": "ふつうのビンゴ",
     "android_app_id": "jp.baibai.fbingo",
-    "ios_bundle_id": "jp.baibai.fbingo"
+    "ios_bundle_id": "jp.baibai.fbingo",
+    "ios_sku": "FBINGO"
   }
 ]
