@@ -1,0 +1,69 @@
+name: play-overview-to-bq
+
+on:
+  schedule:
+    - cron: "30 17 * * *" # JST 02:30（UTC 17:30）
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Fetch overview and convert (this month)
+        env:
+          PLAY_BUCKET: pubsite_prod_rev_02126004667937646089
+          PACKAGE: tamago.android.com
+        run: |
+          YYYYMM=$(date -u +"%Y%m")
+          SRC="gs://${PLAY_BUCKET}/stats/installs/installs_${PACKAGE}_${YYYYMM}_overview.csv"
+          gsutil cp "${SRC}" /tmp/play.csv
+          iconv -f UTF-16LE -t UTF-8 /tmp/play.csv > /tmp/play_utf8.csv
+          wc -l /tmp/play_utf8.csv
+          tail -n 3 /tmp/play_utf8.csv
+
+      - name: Upload to stash bucket
+        env:
+          STASH_BUCKET: ${{ secrets.STASH_BUCKET }}
+        run: |
+          YYYYMM=$(date -u +"%Y%m")
+          gsutil cp /tmp/play_utf8.csv "gs://${STASH_BUCKET}/play/installs_tamago_${YYYYMM}_overview.csv"
+
+      - name: Load to staging (replace)
+        env:
+          STASH_BUCKET: ${{ secrets.STASH_BUCKET }}
+        run: |
+          YYYYMM=$(date -u +"%Y%m")
+          bq --project_id=store-kpi --location=US load \
+            --source_format=CSV \
+            --skip_leading_rows=1 \
+            --replace \
+            --schema=Date:DATE,Package_name:STRING,Daily_Device_Installs:INT64,Daily_Device_Uninstalls:INT64,Daily_Device_Upgrades:INT64,Total_User_Installs:INT64,Daily_User_Installs:INT64,Daily_User_Uninstalls:INT64,Active_Device_Installs:INT64,Install_events:INT64,Update_events:INT64,Uninstall_events:INT64 \
+            store-kpi:app_kpi_raw.google_play_installs_overview_stage \
+            "gs://${STASH_BUCKET}/play/installs_tamago_${YYYYMM}_overview.csv"
+
+      - name: Merge staging -> daily
+        run: |
+          bq --project_id=store-kpi --location=US query --nouse_legacy_sql '
+          MERGE `store-kpi.app_kpi_raw.google_play_installs_overview_daily` T
+          USING `store-kpi.app_kpi_raw.google_play_installs_overview_stage` S
+          ON T.Date = S.Date AND T.Package_name = S.Package_name
+          WHEN MATCHED THEN UPDATE SET
+            Daily_Device_Installs = S.Daily_Device_Installs,
+            Daily_Device_Uninstalls = S.Daily_Device_Uninstalls,
+            Daily_Device_Upgrades = S.Daily_Device_Upgrades,
+            Total_User_Installs = S.Total_User_Installs,
+            Daily_User_Installs = S.Daily_User_Installs,
+            Daily_User_Uninstalls = S.Daily_User_Uninstalls,
+            Active_Device_Installs = S.Active_Device_Installs,
+            Install_events = S.Install_events,
+            Update_events = S.Update_events,
+            Uninstall_events = S.Uninstall_events
+          WHEN NOT MATCHED THEN
+            INSERT ROW;
+          '
