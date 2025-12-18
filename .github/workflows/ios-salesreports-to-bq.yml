@@ -26,7 +26,7 @@ jobs:
 
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           BQ_PROJECT: store-kpi
-          BQ_DATASET: app_kpi
+          BQ_DATASET: app_kpi_raw
           BQ_TABLE_DAILY: downloads_daily
           BQ_LOCATION: US
         run: node scripts/fetch_ios_sales_and_load_bq.js --mode latest
