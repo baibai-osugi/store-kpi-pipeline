@@ -5,11 +5,14 @@
   "scripts": {
     "run:daily:dummy": "node scripts/daily_dummy.js",
     "run:android:latest": "node scripts/fetch_android_installs.js --mode=latest",
-    "run:android:backfill": "node scripts/fetch_android_installs.js --mode=backfill"
+    "run:android:backfill": "node scripts/fetch_android_installs.js --mode=backfill",
+    "run:ios:latest": "node scripts/fetch_ios_sales_and_load_bq.js --mode latest",
+    "run:ios:backfill": "node scripts/fetch_ios_sales_and_load_bq.js --mode backfill --days 7"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^8.0.0",
     "@google-cloud/storage": "^7.16.0",
-    "csv-parse": "^5.5.6"
+    "csv-parse": "^5.5.6",
+    "jsonwebtoken": "^9.0.2"
   }
 }
