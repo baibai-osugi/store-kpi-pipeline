@@ -46,12 +46,9 @@ function todayJstYYYYMMDD() {
 }
 
 function extractDateFromFilename(filename) {
-  // よくある形式を雑に拾う：20251217 / 2025-12-17 / 2025_12_17 など
   const m1 = filename.match(/(20\d{2})[-_]?(\d{2})[-_]?(\d{2})/);
   if (m1) return `${m1[1]}-${m1[2]}-${m1[3]}`;
-
-  // 月次CSVなど日付が無い場合は「今日」で安全側
-  return todayJstYYYYMMDD();
+  return null; // ★今日にしない
 }
 
 function loadApps() {
@@ -88,7 +85,7 @@ async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
   const file = bucket.file(objectName);
 
   // ファイル名から日付を推定
-  const date = extractDateFromFilename(objectName);
+  const date = extractDateFromFilename(objectName) ?? todayJstYYYYMMDD();
 
   // 集計：packageName -> {JP, OVERSEAS} or {ALL}
   const agg = new Map();
@@ -210,9 +207,9 @@ async function mergeToBigQuery(bigquery, tableFqdn, date, rows, source) {
 
 async function main() {
   const mode = getArg("mode", "latest"); // latest | backfill
+  const days = Number(getArg("days", "0")) || 0; // 0なら無制限
   const appsMap = loadApps();
 
-  // ✅ Storage / BigQuery を「GCP_SA_KEYがあればそれ、なければADC」で作る
   const storage = credentials ? new Storage({ projectId, credentials }) : new Storage();
   const bucket = storage.bucket(gcsBucket);
 
@@ -221,20 +218,50 @@ async function main() {
     console.log("No objects found under prefix:", `gs://${gcsBucket}/${gcsPrefix}`);
     return;
   }
-  
+
   const before = allObjects.length;
-  const overviewOnly = allObjects.filter((name) => name.endsWith("_overview.csv"));
+  const overviewOnly = allObjects.filter((name) =>
+    name.endsWith("_overview.csv") || name.endsWith("_overview.csv.gz")
+  );
+
   console.log(`Filtered overview.csv: ${before} -> ${overviewOnly.length}`);
 
   if (overviewOnly.length === 0) {
     console.log("No overview.csv found under prefix:", `gs://${gcsBucket}/${gcsPrefix}`);
     return;
   }
-  
-  overviewOnly.sort();
-  const targets = mode === "backfill"
-  ? overviewOnly
-  : [overviewOnly[overviewOnly.length - 1]];
+
+  // overviewOnly を日付で絞る（backfill時のみ）
+  let filtered = overviewOnly;
+
+  if (mode === "backfill" && days > 0) {
+    const now = new Date();
+    const todayJst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const todayStr = todayJst.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    const today = new Date(todayStr + "T00:00:00Z");
+    const from = new Date(today);
+    from.setUTCDate(from.getUTCDate() - (days - 1));
+
+    filtered = overviewOnly.filter((name) => {
+      const d = extractDateFromFilename(name);
+      if (!d) return false; // ★日付が無いものは除外
+      const dt = new Date(d + "T00:00:00Z");
+      return dt >= from && dt <= today;
+    });
+
+    console.log(`Filtered by days=${days}: ${overviewOnly.length} -> ${filtered.length}`);
+
+    if (filtered.length === 0) {
+      console.log("No overview files in the specified date range. Nothing to do.");
+      return;
+    }
+  }
+
+  // ★ targets は filtered を元に作る（ここが重要）
+  filtered.sort();
+  const targets =
+    mode === "backfill" ? filtered : [filtered[filtered.length - 1]];
 
   console.log(`Mode=${mode} targets=${targets.length}`);
 
