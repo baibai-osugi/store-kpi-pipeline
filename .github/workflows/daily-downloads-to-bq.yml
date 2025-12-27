@@ -3,51 +3,47 @@ name: daily-downloads-to-bq
 on:
   workflow_dispatch:
   schedule:
-    # UTC 02:00 = 日本時間 11:00（毎日）
-    - cron: "0 2 * * *"
+    - cron: "0 2 * * *" # JST 11:00
 
 jobs:
-  run:
-    runs-on: ubuntu-latest
-
+  android:
+    runs-on: [self-hosted]   # ← Macのrunnerに投げる
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - run: npm install
 
-      # ---- Android (Google Play: country) -> BigQuery MERGE ----
-      - name: Android latest (Google Play country -> downloads_daily)
+      - name: Android latest (pubsite -> BQ)
         env:
-          # BigQuery
           BQ_PROJECT: store-kpi
           BQ_DATASET: app_kpi_raw
           BQ_TABLE_DAILY: downloads_daily
           BQ_LOCATION: US
-          # Auth (BigQuery)
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
-          # Google Play reports (GCS)
+          # pubsite
           GCS_BUCKET: pubsite_prod_rev_02126004667937646089
-          # ビンゴの country.csv を確実に拾う（最新月の country を狙う）
           GCS_PREFIX: stats/installs/installs_jp.baibai.fbingo_
         run: npm run run:android:latest
 
-      # ---- iOS (App Store Connect SalesReports) -> BigQuery MERGE ----
-      - name: iOS latest (ASC salesReports -> downloads_daily)
+  ios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+
+      - name: iOS latest (ASC -> BQ)
         env:
-          # BigQuery
           BQ_PROJECT: store-kpi
           BQ_DATASET: app_kpi_raw
           BQ_TABLE_DAILY: downloads_daily
           BQ_LOCATION: US
-          # Auth (BigQuery)
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
-          # App Store Connect
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
