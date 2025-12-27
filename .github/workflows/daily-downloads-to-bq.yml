@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm ci
+      - run: npm install
 
       # ---- Android (Google Play: country) -> BigQuery MERGE ----
       - name: Android latest (Google Play country -> downloads_daily)
