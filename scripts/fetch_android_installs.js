@@ -221,9 +221,21 @@ async function main() {
     console.log("No objects found under prefix:", `gs://${gcsBucket}/${gcsPrefix}`);
     return;
   }
+  
+  const before = allObjects.length;
+  const overviewOnly = allObjects.filter((name) => name.endsWith("_overview.csv"));
+  console.log(`Filtered overview.csv: ${before} -> ${overviewOnly.length}`);
 
-  allObjects.sort();
-  const targets = mode === "backfill" ? allObjects : [allObjects[allObjects.length - 1]];
+  if (overviewOnly.length === 0) {
+    console.log("No overview.csv found under prefix:", `gs://${gcsBucket}/${gcsPrefix}`);
+    return;
+  }
+  
+  overviewOnly.sort();
+  const targets = mode === "backfill"
+  ? overviewOnly
+  : [overviewOnly[overviewOnly.length - 1]];
+
   console.log(`Mode=${mode} targets=${targets.length}`);
 
   const bigquery = credentials ? new BigQuery({ projectId, credentials }) : new BigQuery({ projectId });
