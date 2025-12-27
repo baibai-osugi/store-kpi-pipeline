@@ -16,12 +16,14 @@ const location = process.env.BQ_LOCATION || "US";
 const gcsBucket = process.env.GCS_BUCKET;
 const gcsPrefix = process.env.GCS_PREFIX;
 
-// Auth (GHAでもローカルでも同じにする)
+// Auth（あればSAキー、なければADC）
 let credentials;
-try {
-  credentials = process.env.GCP_SA_KEY ? JSON.parse(process.env.GCP_SA_KEY) : undefined;
-} catch {
-  throw new Error("GCP_SA_KEY is not valid JSON (Secretsの貼り付け内容を確認してください)");
+if (process.env.GCP_SA_KEY) {
+  try {
+    credentials = JSON.parse(process.env.GCP_SA_KEY);
+  } catch {
+    throw new Error("GCP_SA_KEY is not valid JSON (Secretsの貼り付け内容を確認してください)");
+  }
 }
 
 if (!projectId || !dataset || !tableDaily) {
@@ -29,11 +31,6 @@ if (!projectId || !dataset || !tableDaily) {
 }
 if (!gcsBucket || !gcsPrefix) {
   throw new Error("Missing env: GCS_BUCKET / GCS_PREFIX");
-}
-// GitHub Actionsでは必須。ローカルでもSAで統一するなら必須。
-// （ローカルで gcloud ADC を使いたいなら、ここは緩めてもOK）
-if (!credentials) {
-  throw new Error("Missing env: GCP_SA_KEY (GitHub Actionsでは必須)");
 }
 
 function getArg(name, def = null) {
@@ -215,8 +212,8 @@ async function main() {
   const mode = getArg("mode", "latest"); // latest | backfill
   const appsMap = loadApps();
 
-  // ✅ GCS も BigQuery も同じ SA キーで認証（GitHub Actions対応）
-  const storage = new Storage({ projectId, credentials });
+  // ✅ Storage / BigQuery を「GCP_SA_KEYがあればそれ、なければADC」で作る
+  const storage = credentials ? new Storage({ projectId, credentials }) : new Storage();
   const bucket = storage.bucket(gcsBucket);
 
   const allObjects = await listObjects(bucket, gcsPrefix);
@@ -229,7 +226,7 @@ async function main() {
   const targets = mode === "backfill" ? allObjects : [allObjects[allObjects.length - 1]];
   console.log(`Mode=${mode} targets=${targets.length}`);
 
-  const bigquery = new BigQuery({ projectId, credentials });
+  const bigquery = credentials ? new BigQuery({ projectId, credentials }) : new BigQuery({ projectId });
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
 
   let processed = 0;
