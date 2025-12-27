@@ -1,5 +1,11 @@
 [
   {
+    "app_name": "ふつうの五目並べ",
+    "android_app_id": "jp.baibai.fgomoku",
+    "ios_bundle_id": "jp.baibai.fgomoku",
+    "ios_sku": "FGOMOKU"
+  },
+  {
     "app_name": "ふつうの神経衰弱",
     "android_app_id": "jp.baibai.fshinkei",
     "ios_bundle_id": "jp.baibai.fshinkei",
