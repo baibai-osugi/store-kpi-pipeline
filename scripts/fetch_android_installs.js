@@ -108,8 +108,7 @@ async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
         if (!headers || headers.length === 0) continue;
 
         const pkgIdx = pickColumnIndex(headers, ["package_name", "package name", "package"]);
-        const countryIdx = pickColumnIndex(headers, ["country", "country code"]);
-        // installs系：環境で列名が違うので候補を並べる（見つかった最初の列を使う）
+        const countryIdx = pickColumnIndex(headers, ["country", "country code"]); // 無いことがある(overview)
         const installsIdx = pickColumnIndex(headers, [
           "daily_device_installs",
           "daily device installs",
@@ -120,27 +119,32 @@ async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
           "device installs",
         ]);
 
-        if (pkgIdx === -1 || countryIdx === -1 || installsIdx === -1) {
-          // 期待列が無い：このファイル形式ではない可能性
-          // ここで落とすとバックフィルが全部止まるので、分かりやすく例外にする
+        if (pkgIdx === -1 || installsIdx === -1) {
           throw new Error(
             `CSV columns not found in ${objectName}. Found headers: ${headers.slice(0, 20).join(", ")}`
           );
         }
 
         const packageName = String(record[pkgIdx] ?? "").trim();
-        const country = String(record[countryIdx] ?? "").trim().toUpperCase();
         const installsRaw = String(record[installsIdx] ?? "0").trim();
         const installs = Number(installsRaw.replace(/,/g, "")) || 0;
 
         if (!packageName) continue;
-        if (!appsMap.has(packageName)) continue; // apps.json に無いアプリは無視
+        if (!appsMap.has(packageName)) continue;
 
         const key = packageName;
-        if (!agg.has(key)) agg.set(key, { JP: 0, OVERSEAS: 0 });
 
-        if (country === "JP") agg.get(key).JP += installs;
-        else agg.get(key).OVERSEAS += installs;
+        // ✅ country列が無い = overview 形式 → ALL に入れる
+        if (countryIdx === -1) {
+          if (!agg.has(key)) agg.set(key, { ALL: 0 });
+          agg.get(key).ALL += installs;
+        } else {
+          const country = String(record[countryIdx] ?? "").trim().toUpperCase();
+          if (!agg.has(key)) agg.set(key, { JP: 0, OVERSEAS: 0 });
+          if (country === "JP") agg.get(key).JP += installs;
+          else agg.get(key).OVERSEAS += installs;
+        }
+
       }
     });
 
@@ -228,23 +232,34 @@ async function main() {
     for (const [packageName, v] of agg.entries()) {
       const appName = appsMap.get(packageName);
 
-      rows.push(
-        {
+      if ("ALL" in v) {
+        rows.push({
           store: "android",
           app_id: packageName,
           app_name: appName,
-          country_group: "JP",
-          downloads: v.JP,
-        },
-        {
-          store: "android",
-          app_id: packageName,
-          app_name: appName,
-          country_group: "OVERSEAS",
-          downloads: v.OVERSEAS,
-        }
-      );
+          country_group: "ALL",
+          downloads: v.ALL,
+        });
+      } else {
+        rows.push(
+          {
+            store: "android",
+            app_id: packageName,
+            app_name: appName,
+            country_group: "JP",
+            downloads: v.JP,
+          },
+          {
+            store: "android",
+            app_id: packageName,
+            app_name: appName,
+            country_group: "OVERSEAS",
+            downloads: v.OVERSEAS,
+          }
+        );
+      }
     }
+
 
     if (rows.length === 0) {
       console.log("No matching apps rows for this file. Skipped.");

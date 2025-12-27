@@ -121,15 +121,36 @@ async function fetchSalesReportTsv(token, reportDate) {
     "filter[reportType]": "SALES",
     "filter[reportSubType]": "SUMMARY",
     "filter[vendorNumber]": ASC_VENDOR_NUMBER,
-    "filter[reportDate]": reportDate
+    "filter[reportDate]": reportDate,
   });
 
   const url = `https://api.appstoreconnect.apple.com/v1/salesReports?${params.toString()}`;
   const r = await httpGet(url, {
     Authorization: `Bearer ${token}`,
-    Accept: "application/a-gzip, application/octet-stream"
+    Accept: "application/a-gzip, application/octet-stream, application/json",
   });
 
+  // ✅ 売上0の日は 404 で返ってくることがある（正常ケースとして扱う）
+  if (r.status === 404) {
+    const body = r.body.toString("utf8");
+    try {
+      const j = JSON.parse(body);
+      const detail = j?.errors?.[0]?.detail ?? "";
+      if (detail.includes("There were no sales for the date specified")) {
+        console.log("No sales for this date. Treat as 0 rows and continue:", reportDate);
+        return Buffer.from("", "utf8"); // 空TSV
+      }
+    } catch {
+      // JSONでなくても404なら「データなし」として扱いたいなら、ここでも空返しでOK
+      console.log("salesReports returned 404. Treat as 0 rows and continue:", reportDate);
+      return Buffer.from("", "utf8");
+    }
+
+    // 404だけど別理由だった場合はエラーにする
+    throw new Error(`salesReports failed: 404 ${body}`);
+  }
+
+  // その他の非200はエラー
   if (r.status !== 200) {
     throw new Error(`salesReports failed: ${r.status} ${r.body.toString("utf8")}`);
   }
@@ -214,6 +235,11 @@ async function main() {
 
     const tsvBuf = await fetchSalesReportTsv(token, reportDate);
     const rows = parseTsv(tsvBuf);
+
+    if (!tsvBuf || tsvBuf.length === 0 || rows.length === 0) {
+      console.log("No rows for this date. Skipped:", reportDate);
+      continue;
+    }
 
     const agg = new Map();
 
