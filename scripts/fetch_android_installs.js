@@ -8,17 +8,32 @@ import { parse } from "csv-parse";
 const projectId = process.env.BQ_PROJECT;
 const dataset = process.env.BQ_DATASET;
 const tableDaily = process.env.BQ_TABLE_DAILY;
-const location = process.env.BQ_LOCATION || "asia-northeast1";
 
-// ★あなたの pubsite バケットと prefix（後述の workflow env で渡す）
+// BigQueryのロケーション（USのdatasetを使うなら "US" にするのが安全）
+const location = process.env.BQ_LOCATION || "US";
+
+// GCS
 const gcsBucket = process.env.GCS_BUCKET;
-const gcsPrefix = process.env.GCS_PREFIX; // 例: "stats/installs/"
+const gcsPrefix = process.env.GCS_PREFIX;
+
+// Auth (GHAでもローカルでも同じにする)
+let credentials;
+try {
+  credentials = process.env.GCP_SA_KEY ? JSON.parse(process.env.GCP_SA_KEY) : undefined;
+} catch {
+  throw new Error("GCP_SA_KEY is not valid JSON (Secretsの貼り付け内容を確認してください)");
+}
 
 if (!projectId || !dataset || !tableDaily) {
   throw new Error("Missing env: BQ_PROJECT / BQ_DATASET / BQ_TABLE_DAILY");
 }
 if (!gcsBucket || !gcsPrefix) {
   throw new Error("Missing env: GCS_BUCKET / GCS_PREFIX");
+}
+// GitHub Actionsでは必須。ローカルでもSAで統一するなら必須。
+// （ローカルで gcloud ADC を使いたいなら、ここは緩めてもOK）
+if (!credentials) {
+  throw new Error("Missing env: GCP_SA_KEY (GitHub Actionsでは必須)");
 }
 
 function getArg(name, def = null) {
@@ -38,7 +53,7 @@ function extractDateFromFilename(filename) {
   const m1 = filename.match(/(20\d{2})[-_]?(\d{2})[-_]?(\d{2})/);
   if (m1) return `${m1[1]}-${m1[2]}-${m1[3]}`;
 
-  // 取れない場合は「JSTの前日」ではなく、安全側で「今日」にしておく（後で調整可）
+  // 月次CSVなど日付が無い場合は「今日」で安全側
   return todayJstYYYYMMDD();
 }
 
@@ -51,7 +66,7 @@ function loadApps() {
   const map = new Map();
   for (const a of apps) {
     if (!a.app_name) throw new Error(`Invalid app entry (missing app_name): ${JSON.stringify(a)}`);
-    if (a.android_app_id) map.set(a.android_app_id, a.app_name);
+    if (a.android_app_id) map.set(String(a.android_app_id).trim(), a.app_name);
   }
   return map; // packageName -> appName
 }
@@ -75,13 +90,15 @@ async function listObjects(bucket, prefix) {
 async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
   const file = bucket.file(objectName);
 
-  // ファイル名から日付を推定（必要なら後で改善可）
+  // ファイル名から日付を推定
   const date = extractDateFromFilename(objectName);
 
-  // 集計：packageName -> {JP, OVERSEAS}
+  // 集計：packageName -> {JP, OVERSEAS} or {ALL}
   const agg = new Map();
 
   const stream = file.createReadStream();
+
+  // .csv.gz / .gz 対応
   const input = objectName.endsWith(".gz") ? stream.pipe(zlib.createGunzip()) : stream;
 
   let headers = null;
@@ -103,8 +120,6 @@ async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
           headers = record.map((x) => String(x));
           continue;
         }
-
-        // ヘッダが取れていない場合はスキップ
         if (!headers || headers.length === 0) continue;
 
         const pkgIdx = pickColumnIndex(headers, ["package_name", "package name", "package"]);
@@ -126,25 +141,24 @@ async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
         }
 
         const packageName = String(record[pkgIdx] ?? "").trim();
+        if (!packageName) continue;
+
+        // apps.json にあるアプリだけ対象
+        if (!appsMap.has(packageName)) continue;
+
         const installsRaw = String(record[installsIdx] ?? "0").trim();
         const installs = Number(installsRaw.replace(/,/g, "")) || 0;
 
-        if (!packageName) continue;
-        if (!appsMap.has(packageName)) continue;
-
-        const key = packageName;
-
-        // ✅ country列が無い = overview 形式 → ALL に入れる
+        // country列が無い = overview 形式 → ALL に入れる
         if (countryIdx === -1) {
-          if (!agg.has(key)) agg.set(key, { ALL: 0 });
-          agg.get(key).ALL += installs;
+          if (!agg.has(packageName)) agg.set(packageName, { ALL: 0 });
+          agg.get(packageName).ALL += installs;
         } else {
           const country = String(record[countryIdx] ?? "").trim().toUpperCase();
-          if (!agg.has(key)) agg.set(key, { JP: 0, OVERSEAS: 0 });
-          if (country === "JP") agg.get(key).JP += installs;
-          else agg.get(key).OVERSEAS += installs;
+          if (!agg.has(packageName)) agg.set(packageName, { JP: 0, OVERSEAS: 0 });
+          if (country === "JP") agg.get(packageName).JP += installs;
+          else agg.get(packageName).OVERSEAS += installs;
         }
-
       }
     });
 
@@ -159,7 +173,6 @@ async function parseInstallsFromGcsFile(bucket, objectName, appsMap) {
 }
 
 async function mergeToBigQuery(bigquery, tableFqdn, date, rows, source) {
-  // rows: [{store, app_id, app_name, country_group, downloads}]
   const query = `
     MERGE ${tableFqdn} T
     USING (
@@ -202,7 +215,8 @@ async function main() {
   const mode = getArg("mode", "latest"); // latest | backfill
   const appsMap = loadApps();
 
-  const storage = new Storage();
+  // ✅ GCS も BigQuery も同じ SA キーで認証（GitHub Actions対応）
+  const storage = new Storage({ projectId, credentials });
   const bucket = storage.bucket(gcsBucket);
 
   const allObjects = await listObjects(bucket, gcsPrefix);
@@ -211,13 +225,11 @@ async function main() {
     return;
   }
 
-  // ソートして、latest は最後、backfill は全部
   allObjects.sort();
-
   const targets = mode === "backfill" ? allObjects : [allObjects[allObjects.length - 1]];
   console.log(`Mode=${mode} targets=${targets.length}`);
 
-  const bigquery = new BigQuery({ projectId });
+  const bigquery = new BigQuery({ projectId, credentials });
   const tableFqdn = `\`${projectId}.${dataset}.${tableDaily}\``;
 
   let processed = 0;
@@ -227,7 +239,6 @@ async function main() {
 
     const { date, agg } = await parseInstallsFromGcsFile(bucket, obj, appsMap);
 
-    // BigQuery へ流す rows を作る（Androidのみ）
     const rows = [];
     for (const [packageName, v] of agg.entries()) {
       const appName = appsMap.get(packageName);
@@ -260,15 +271,14 @@ async function main() {
       }
     }
 
-
     if (rows.length === 0) {
       console.log("No matching apps rows for this file. Skipped.");
       continue;
     }
 
     await mergeToBigQuery(bigquery, tableFqdn, date, rows, "google_play");
-
     processed += 1;
+
     console.log("MERGE done:", { date, rows: rows.length, file: obj });
   }
 
