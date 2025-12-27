@@ -24,7 +24,7 @@ jobs:
 
           # pubsite
           GCS_BUCKET: pubsite_prod_rev_02126004667937646089
-          GCS_PREFIX: stats/installs/installs_jp.baibai.fbingo_
+          GCS_PREFIX: stats/installs/
         run: npm run run:android:latest
 
   ios:
